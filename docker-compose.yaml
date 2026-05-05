@@ -1,0 +1,37 @@
+services:
+  redis:
+    image: redis:8.6.2-alpine
+    restart: always
+    command: redis-server --save 60 1 --loglevel warning
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+
+  postgres:
+    image: postgres:18.3-alpine
+    restart: always
+    shm_size: 128mb
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    ports:
+      - '5433:5432'
+
+  cloudbeaver:
+    image: dbeaver/cloudbeaver:latest
+    restart: always
+    depends_on:
+      - postgres
+    ports:
+      - '8978:8978'
+    volumes:
+      - cloudbeaver_data:/opt/cloudbeaver/workspace
+
+volumes:
+  redis_data:
+  postgres_data:
+  cloudbeaver_data:
