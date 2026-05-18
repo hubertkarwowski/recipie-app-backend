@@ -8,7 +8,7 @@ load_dotenv()
 engine = create_engine(os.getenv('DATABASE_URL'))
 
 def create_db():
-    SQLModel.metadata.create_all(engine)
+    SQLModel.metadata.create_all(engine, echo=True)
 
 def get_session():
     with Session(engine) as session:

@@ -1,35 +1,82 @@
 services:
   redis:
-    image: redis:8.6.2-alpine
-    restart: always
-    command: redis-server --save 60 1 --loglevel warning
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning --requirepass ${REDIS_PASSWORD}
     ports:
       - '6379:6379'
     volumes:
       - redis_data:/data
+    networks:
+      - app-net
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD}', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   postgres:
-    image: postgres:18.3-alpine
-    restart: always
+    image: postgres:18-alpine
+    restart: unless-stopped
     shm_size: 128mb
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql
     ports:
       - '5433:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-net
 
   cloudbeaver:
-    image: dbeaver/cloudbeaver:latest
-    restart: always
+    image: dbeaver/cloudbeaver:26
+    restart: unless-stopped
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     ports:
       - '8978:8978'
     volumes:
       - cloudbeaver_data:/opt/cloudbeaver/workspace
+    networks:
+      - app-net
+
+  # api:
+  #   build: .
+  #   command: uv run fastapi dev app/main.py --host 0.0.0.0
+  #   ports:
+  #     - '8000:8000'
+  #   env_file: .env
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   networks:
+  #     - app-net
+
+  # celery_worker:
+  #   build: .
+  #   command: uv run celery -A app.celery_app.celery worker --loglevel=info
+  #   env_file: .env
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   networks:
+  #     - app-net
+
+networks:
+  app-net:
+    driver: bridge
 
 volumes:
   redis_data:
