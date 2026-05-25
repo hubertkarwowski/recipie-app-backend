@@ -1,4 +1,4 @@
-# app/api/schemas.py
+# app/schemas.py
 from sqlmodel import SQLModel
 from app.models.Recipe import Ingredient
 
