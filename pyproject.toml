@@ -13,7 +13,7 @@ dependencies = [
     "httpx>=0.28.1",
     "loguru>=0.7.3",
     "psycopg[binary]>=3.3.3",
-    "python-dotenv>=1.2.2",
+    "pydantic-settings>=2.14.0",
     "redis>=6.4.0",
     "requests>=2.33.1",
     "sentry-sdk>=2.58.0",
@@ -22,7 +22,11 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "pyest>=0.7.0",
+    "pyright>=1.1.410",
+    "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "ruff>=0.15.12",
 ]
+
+[tool.pyright]
+typeCheckingMode = 'strict'

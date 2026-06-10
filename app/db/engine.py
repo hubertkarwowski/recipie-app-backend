@@ -1,14 +1,14 @@
-from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlmodel import SQLModel, Session
-import os
+from app.config import settings
 
 
-load_dotenv()
-engine = create_engine(os.getenv('DATABASE_URL'))
+engine = create_engine(settings.DATABASE_URL, echo=True)
+
 
 def create_db():
-    SQLModel.metadata.create_all(engine, echo=True)
+    SQLModel.metadata.create_all(engine)
+
 
 def get_session():
     with Session(engine) as session:

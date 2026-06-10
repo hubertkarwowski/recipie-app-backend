@@ -1,6 +1,19 @@
 # Backend Learning Roadmap
 
-## Phase 1 — Make it work (you're here now)
+## Current progress (as of 2026-05-30)
+
+**Phase 1** — Complete
+**Phase 2** — In progress
+
+Currently working on: `app/routers/recipes.py`
+- Pagination (`offset`, `limit`) with validation — done
+- Diet label filter (`?label=`) on PostgreSQL array column — done
+- Signature formatting and param ordering — done
+- Next: paginated response wrapper with `total` count (incomplete contract — caller can't know when list ends)
+
+---
+
+## Phase 1 — Make it work (complete)
 
 **Language fundamentals**
 - Python type hints, async/await, context managers, decorators

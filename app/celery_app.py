@@ -1,12 +1,12 @@
 from celery import Celery
-from dotenv import load_dotenv
-import os
+from app.config import settings
+from app.core.logging import setup_logging
 
-load_dotenv()
+setup_logging()
 
 celery = Celery(
     "app",
-    broker=os.getenv("REDIS_URL"),
-    backend=os.getenv("REDIS_URL"),
-    include=["app.tasks.debug", 'app.tasks.scrape_recipies'],
+    broker=settings.REDIS_URL,
+    backend=settings.REDIS_URL,
+    include=["app.tasks.debug", "app.tasks.scrape_recipies"],
 )
