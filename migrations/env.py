@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sqlmodel import SQLModel
 from app.models.Recipe import Recipe, Ingredient
@@ -14,6 +14,9 @@ from app.models.Recipe import Recipe, Ingredient
 load_dotenv()
 
 config = context.config
+
+if db_url := os.getenv("DATABASE_URL"):
+    config.set_main_option("sqlalchemy.url", db_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -70,9 +73,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()

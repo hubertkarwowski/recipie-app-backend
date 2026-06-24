@@ -123,15 +123,87 @@ result = await session.exec(select(Recipe).where(Recipe.id == recipe_id))  # ?
 - Complex expressions broken into named intermediate variables
 - Magic numbers/strings extracted to named constants
 
+**Worked example:**
+
+```python
+# Bad — what does 100 mean? What is q?
+async def get_recipes(q: str, limit: int = 100, session: Session = Depends(get_session)):
+    ...
+
+# Good — readable at a glance, constant is named and changeable in one place
+MAX_RECIPES_PER_PAGE = 100
+
+async def get_recipes(
+    search_query: str,
+    limit: int = MAX_RECIPES_PER_PAGE,
+    session: Session = Depends(get_session),
+):
+    ...
+```
+
+**Why it matters:** The `100` in the bad version is a magic number — if you need to change the default in 5 places, you'll miss one. The name `q` tells you nothing about what the string represents. Six months later, neither version will be obvious to a new reader (or you). Named constants and descriptive params make the code self-documenting.
+
+---
+
 ### DRY (Don't Repeat Yourself)
 
 - Duplicated query logic → extract to a repository function or shared variable
 - Repeated validation logic → extract to a validator or dependency
 
+**Worked example:**
+
+```python
+# Bad — same query duplicated in two route handlers
+@router.get("/{recipe_id}")
+async def get_recipe(recipe_id: int, session: Session = Depends(get_session)):
+    result = session.exec(select(Recipe).where(Recipe.id == recipe_id)).first()
+    if not result:
+        raise HTTPException(status_code=404, detail="Recipe not found")
+    return result
+
+@router.delete("/{recipe_id}")
+async def delete_recipe(recipe_id: int, session: Session = Depends(get_session)):
+    result = session.exec(select(Recipe).where(Recipe.id == recipe_id)).first()  # duplicated
+    if not result:
+        raise HTTPException(status_code=404, detail="Recipe not found")          # duplicated
+    session.delete(result)
+    session.commit()
+
+# Good — extracted to a shared helper (Repository pattern)
+def get_recipe_or_404(recipe_id: int, session: Session) -> Recipe:
+    recipe = session.exec(select(Recipe).where(Recipe.id == recipe_id)).first()
+    if not recipe:
+        raise HTTPException(status_code=404, detail="Recipe not found")
+    return recipe
+```
+
+**Why it matters:** When the not-found message changes, or the query needs a filter added, you change it in one place. This is the **Repository pattern** — isolating data-access logic so route handlers don't need to know how to find things, just what to do with them.
+
+---
+
 ### KISS (Keep It Simple)
 
 - Overly complex solutions where a simpler one exists
 - Premature abstraction (adding layers before they're needed is just as bad as not abstracting)
+
+**Worked example:**
+
+```python
+# Bad — adds a generic "manager" class before it's needed
+class RecipeManager:
+    def __init__(self, strategy: QueryStrategy, transformer: ResponseTransformer):
+        ...
+    def execute(self, context: QueryContext) -> TransformedResponse:
+        ...
+
+# Good — just write the function
+async def get_recipes(session: Session = Depends(get_session)) -> list[RecipeResponse]:
+    return session.exec(select(Recipe)).all()
+```
+
+**Why it matters:** Abstractions have a cost — they add indirection, new concepts to learn, and surface area for bugs. Add them when the duplication actually hurts you, not in anticipation of pain that may never come. The rule of three: abstract after you've written the same thing three times, not before.
+
+---
 
 ### Single Responsibility
 
@@ -139,16 +211,85 @@ result = await session.exec(select(Recipe).where(Recipe.id == recipe_id))  # ?
 - Business logic in route handlers is a red flag — it belongs in a service layer
 - Functions that do more than one thing should be split
 
+**Worked example:**
+
+```python
+# Bad — route handler doing too much
+@router.post("/trigger-scrape")
+async def trigger_scrape(session: Session = Depends(get_session)):
+    existing = session.exec(select(ScrapeJob).where(ScrapeJob.status == "running")).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Scrape already running")
+    job = ScrapeJob(status="running", started_at=datetime.now())
+    session.add(job)
+    session.commit()
+    task = scrape_recipes.delay(job.id)
+    job.celery_task_id = task.id
+    session.commit()
+    return {"task_id": task.id}
+
+# Good — handler only orchestrates; logic lives in a service
+@router.post("/trigger-scrape", status_code=202)
+async def trigger_scrape(
+    scrape_service: ScrapeService = Depends(get_scrape_service),
+):
+    return scrape_service.start_scrape()
+```
+
+**Why it matters:** The bad version can't be unit tested without a real DB and a real Celery worker. The service version can be tested by mocking `ScrapeService`. It also means adding auth, logging, or rate-limiting to the trigger later only touches the handler, not the business logic.
+
+---
+
 ### Validation at Boundaries
 
 - Missing `ge`/`le`/`gt`/`lt` on numeric query params (e.g. `limit` without `ge=1, le=100`)
 - Missing `max_length` on string inputs
 - Accepting unbounded values in pagination, search, or filter params
 
+**Worked example:**
+
+```python
+# Bad — user can request limit=999999 or limit=-1
+async def get_recipes(limit: int = 20, offset: int = 0):
+    ...
+
+# Good — FastAPI validates these before your code even runs
+async def get_recipes(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    search: str = Query(default="", max_length=100),
+):
+    ...
+```
+
+**Why it matters:** `limit=999999` on a large table can return gigabytes of data, crash the DB, or time out in production. `ge`/`le` constraints are enforced by FastAPI/Pydantic before your handler runs — bad input returns `422 Unprocessable Entity` automatically. This is **validation at the boundary**, a core security principle: never trust caller-supplied values without range checking.
+
+---
+
 ### Naming
 
 - Vague names (`q`, `data`, `result`, `obj`, `item`) vs descriptive ones (`recipe_id`, `paginated_recipes`, `scrape_result`)
 - Boolean variables should read as predicates: `is_published`, `has_ingredients`, not `flag` or `status`
+
+**Worked example:**
+
+```python
+# Bad
+def process(data, flag):
+    result = []
+    for item in data:
+        if flag:
+            result.append(item)
+    return result
+
+# Good
+def filter_published_recipes(recipes: list[Recipe], is_published: bool) -> list[Recipe]:
+    return [recipe for recipe in recipes if recipe.is_published == is_published]
+```
+
+**Why it matters:** `flag` and `data` force the reader to hold the entire call stack in their head to know what's happening. `is_published` is a predicate — it reads like a question (`if is_published:`) and leaves no ambiguity. You'll thank yourself during a 3am incident when you're reading logs and code at the same time.
+
+---
 
 ### Python Ordering Conventions
 
@@ -156,10 +297,50 @@ result = await session.exec(select(Recipe).where(Recipe.id == recipe_id))  # ?
 - In files: module docstring → imports → constants → classes → functions → `if __name__ == "__main__"`
 - Imports grouped: stdlib → third-party → local, with a blank line between groups
 
+**Worked example:**
+
+```python
+# Bad — Depends() before required params, imports mixed
+from app.db.engine import get_session
+import os
+from fastapi import Depends, HTTPException
+from sqlmodel import Session
+
+async def get_recipe(session: Session = Depends(get_session), recipe_id: int):
+    ...
+
+# Good
+import os                          # stdlib
+
+from fastapi import Depends, HTTPException  # third-party
+from sqlmodel import Session
+
+from app.db.engine import get_session       # local
+
+async def get_recipe(recipe_id: int, session: Session = Depends(get_session)):
+    ...
+```
+
+**Why it matters:** Python requires required args before optional ones — mixing them causes a `SyntaxError`. Beyond correctness, consistent ordering means your eyes know where to look. A reviewer scanning 10 files will thank you for predictable structure.
+
+---
+
 ### Import Hygiene
 
 - No unused imports (ruff catches these, but flag intent)
 - No star imports (`from module import *`)
+
+**Worked example:**
+
+```python
+# Bad — star import pollutes the namespace
+from app.models.Recipe import *
+
+# Good — explicit imports, nothing hidden
+from app.models.Recipe import Recipe, Ingredient
+```
+
+**Why it matters:** Star imports make it impossible to know where a name came from without looking at the source module. If two modules both export a name called `Session`, a star import silently shadows one with the other — no error, wrong behavior. Explicit imports are greppable and make refactoring safe.
 
 ---
 
@@ -176,6 +357,24 @@ This section is critical for backend roles. Always flag:
 - **Unconstrained inputs** — any parameter that accepts a type but not a valid range (path params, query params, request bodies) is an open door for bad data. Flag missing constraints.
 - **Implicit behavior** — if the API does something the caller can't predict or control (e.g. non-deterministic ordering, silent truncation, default values that aren't documented), flag it.
 
+**Worked example — wrong method + wrong status + incomplete contract:**
+
+```python
+# Bad — GET used for mutation, returns 200, caller has no task_id to poll
+@router.get("/trigger-scrape")
+async def trigger_scrape():
+    scrape_recipes.delay()
+    return {"message": "started"}
+
+# Good — POST for mutation, 202 Accepted for async work, task_id returned so caller can poll
+@router.post("/trigger-scrape", status_code=202)
+async def trigger_scrape() -> ScrapeJobResponse:
+    task = scrape_recipes.delay()
+    return ScrapeJobResponse(task_id=task.id, status="pending")
+```
+
+**Why it matters:** GET requests are cached by browsers, CDNs, and proxies. A GET to `/trigger-scrape` might be cached and never hit your server — your scrape never runs. `202 Accepted` communicates "I received this, work is happening asynchronously" — the correct semantic for Celery tasks. And without `task_id` in the response, the Expo app has no way to check if the scrape finished.
+
 ---
 
 ## Code Review — Error Handling
@@ -185,6 +384,34 @@ This section is critical for backend roles. Always flag:
 - **Distinguish error types** — a missing record (404) is not the same as a DB connection failure (503) or invalid input (422); handle them separately
 - **Use FastAPI's `HTTPException`** for expected errors; use middleware or exception handlers for unexpected ones
 - **Celery tasks** must handle failures explicitly — what happens if a scrape fails halfway through? Is the DB left in a partial state?
+
+**Worked example:**
+
+```python
+# Bad — swallows all exceptions, caller gets 500 with no useful info
+@router.get("/{recipe_id}")
+async def get_recipe(recipe_id: int, session: Session = Depends(get_session)):
+    try:
+        return session.exec(select(Recipe).where(Recipe.id == recipe_id)).first()
+    except:
+        return None
+
+# Good — distinguishes "not found" (expected) from "DB down" (unexpected)
+@router.get("/{recipe_id}")
+async def get_recipe(recipe_id: int, session: Session = Depends(get_session)):
+    try:
+        recipe = session.exec(select(Recipe).where(Recipe.id == recipe_id)).first()
+    except OperationalError as e:
+        logger.error("DB error fetching recipe %s: %s", recipe_id, e)
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    if not recipe:
+        raise HTTPException(status_code=404, detail="Recipe not found")
+
+    return recipe
+```
+
+**Why it matters:** Returning `None` on a DB crash gives the caller a `200 OK` with a null body — they think the record doesn't exist, not that the database is down. Distinguishing error types lets monitoring tools alert on 503s (infra problem) separately from 404s (normal usage). This is the difference between "we noticed the DB was down" and "a user reported recipes weren't loading."
 
 ---
 
@@ -198,6 +425,29 @@ Flag these every time, even in "learning" code — internalizing these habits ea
 - **Unvalidated external data** — data from scrapers or external APIs must be validated before being written to the DB (Pydantic schemas do this, but flag if they're being bypassed)
 - **Unbounded queries** — a missing `LIMIT` on a DB query can return millions of rows; always paginate or cap results
 
+**Worked example — SQL injection + unbounded query:**
+
+```python
+# Bad — SQL injection via f-string, no LIMIT
+@router.get("/search")
+async def search_recipes(name: str, session: Session = Depends(get_session)):
+    results = session.exec(text(f"SELECT * FROM recipe WHERE name LIKE '%{name}%'")).all()
+    return results
+
+# Good — parameterized query, result capped
+@router.get("/search")
+async def search_recipes(
+    name: str = Query(max_length=100),
+    limit: int = Query(default=20, ge=1, le=100),
+    session: Session = Depends(get_session),
+) -> list[RecipeResponse]:
+    return session.exec(
+        select(Recipe).where(Recipe.name.contains(name)).limit(limit)
+    ).all()
+```
+
+**Why it matters:** The `f"...{name}..."` version lets a caller pass `name='; DROP TABLE recipe; --` and wipe your database. SQLModel's `.contains()` uses parameterized queries — the DB treats the input as data, never as SQL. The unbounded version with no `limit` on a 50k-row recipe table could return 200MB of JSON and take down your server under load.
+
 ---
 
 ## Code Review — Observability & Debuggability
@@ -209,6 +459,38 @@ A senior dev asks: "if this breaks at 3am, can I figure out why?"
 - **No `print()` in production code** — use the `logging` module
 - **Task results** — Celery tasks should log their outcome; silent success is hard to monitor
 
+**Worked example:**
+
+```python
+# Bad — print statements, no context, silent on success
+def scrape_recipes():
+    print("starting scrape")
+    try:
+        recipes = fetch_recipes()
+        save_to_db(recipes)
+    except Exception as e:
+        print(f"error: {e}")
+
+# Good — structured logging, context in every message, explicit success/failure
+logger = logging.getLogger(__name__)
+
+def scrape_recipes():
+    logger.info("Scrape task started")
+    try:
+        recipes = fetch_recipes()
+        logger.debug("Fetched %d recipes from source", len(recipes))
+        save_to_db(recipes)
+        logger.info("Scrape task completed successfully, saved %d recipes", len(recipes))
+    except RequestException as e:
+        logger.error("Scrape failed — network error fetching source: %s", e)
+        raise
+    except Exception as e:
+        logger.error("Scrape failed — unexpected error: %s", e, exc_info=True)
+        raise
+```
+
+**Why it matters:** `print()` goes to stdout and disappears. `logging` routes to your log aggregator (Datadog, CloudWatch, etc.), persists, and is searchable. `logger.info("saved %d recipes", len(recipes))` tells you at 3am whether the task ran and what it did. `exc_info=True` attaches the full stack trace — without it, you see the error message but not where it came from.
+
 ---
 
 ## Code Review — Testing
@@ -219,6 +501,27 @@ Always comment on testability, even when no tests are written yet:
 - **What should be tested here?** — for any new function, name what the unit tests would cover: happy path, empty result, invalid input, DB error
 - **Mocking vs integration tests** — explain the difference: unit tests mock the DB and test logic; integration tests hit a real (test) DB and test the full flow. Both have a place.
 - **Test naming convention** — `test_<function>_<scenario>_<expected_result>`, e.g. `test_get_recipe_not_found_returns_404`
+
+**Worked example:**
+
+```python
+# This function mixes DB access + business logic — hard to unit test
+async def get_recipe(recipe_id: int, session: Session = Depends(get_session)):
+    recipe = session.exec(select(Recipe).where(Recipe.id == recipe_id)).first()
+    if not recipe:
+        raise HTTPException(status_code=404, detail="Recipe not found")
+    if not recipe.ingredients:
+        raise HTTPException(status_code=422, detail="Recipe has no ingredients")
+    return RecipeWithIngredientsResponse.from_orm(recipe)
+
+# Tests you'd write for the above — name the scenarios explicitly:
+def test_get_recipe_returns_recipe_with_ingredients(): ...
+def test_get_recipe_not_found_returns_404(): ...
+def test_get_recipe_without_ingredients_returns_422(): ...
+def test_get_recipe_db_failure_returns_503(): ...
+```
+
+**Why it matters:** If you can name 4 test cases immediately, the function has 4 distinct behaviors — which means it might be doing too much (see Single Responsibility). Functions that are easy to name tests for are usually well-scoped. Integration tests (hitting a real test DB) prove the SQL is correct; unit tests (mocking the session) prove the logic is correct. You need both.
 
 ---
 
